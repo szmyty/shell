@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -Eeuo pipefail
+
+# ------------------------------------------------------------------------------
+# cb — copy text to the system clipboard (cross-platform)
+# ------------------------------------------------------------------------------
+
+VERSION="1.2.0"
+
+# ------------------------------------------------------------------------------
+# Bootstrap shell library
+# ------------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../shell.sh"
+
+# ------------------------------------------------------------------------------
+# Helpers (cb-specific policy)
+# ------------------------------------------------------------------------------
+
+die() {
+  local code="$1"; shift || true
+  log::error "$*"
+  exit "${code}"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  cb [--file <path>|-] [TEXT...]
+  cb --help | --version
+
+Options:
+  --file <path>   Read from file (use '-' for stdin).
+  -h, --help      Show help and exit.
+  -v, --version   Show version and exit.
+
+Examples:
+  echo "hello" | cb
+  cb --file ./notes.txt
+  cb "Quick brown fox"
+EOF
+}
+
+# ------------------------------------------------------------------------------
+# Backend detection
+# ------------------------------------------------------------------------------
+
+select_backend() {
+  if os::is_macos && guard::has_command pbcopy; then
+    printf "pbcopy"; return 0
+  fi
+
+  if os::is_linux; then
+    if terminal::has_term && guard::has_command wl-copy; then
+      printf "wl-copy"; return 0
+    fi
+    if guard::has_command xclip; then
+      printf "xclip"; return 0
+    fi
+    if guard::has_command xsel; then
+      printf "xsel"; return 0
+    fi
+    if os::is_wsl && guard::has_command clip.exe; then
+      printf "clip.exe"; return 0
+    fi
+  fi
+
+  if os::is_windows && guard::has_command powershell.exe; then
+    printf "powershell.exe"; return 0
+  fi
+
+  return 1
+}
+
+copy_with_backend() {
+  case "$1" in
+    pbcopy)           pbcopy ;;
+    wl-copy)          wl-copy ;;
+    xclip)            xclip -selection clipboard ;;
+    xsel)             xsel --input --clipboard ;;
+    clip.exe)         clip.exe ;;
+    powershell.exe)
+      powershell.exe -NoProfile -Command \
+        'Set-Clipboard -Value ([Console]::In.ReadToEnd())'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+# CLI parsing
+# ------------------------------------------------------------------------------
+
+FROM_FILE=""
+INLINE_TEXT=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file)
+      [[ $# -ge 2 ]] || die 1 "--file requires a path (or '-')"
+      FROM_FILE="$2"; shift
+      ;;
+    -h|--help)
+      usage; exit 0
+      ;;
+    -v|--version)
+      printf 'cb v%s\n' "${VERSION}"; exit 0
+      ;;
+    --)
+      shift; break
+      ;;
+    -*)
+      die 1 "Unknown option: $1"
+      ;;
+    *)
+      INLINE_TEXT+=("$1")
+      ;;
+  esac
+  shift
+done
+
+[[ $# -gt 0 ]] && INLINE_TEXT+=("$@")
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+backend="$(select_backend)" ||
+  die 127 "No supported clipboard backend found."
+
+log::debug "Using backend: ${backend}"
+
+if [[ -n "${FROM_FILE}" ]]; then
+  if [[ "${FROM_FILE}" == "-" ]]; then
+    copy_with_backend "${backend}"
+  else
+    guard::file_exists "${FROM_FILE}" ||
+      die 1 "File not found: ${FROM_FILE}"
+    cat -- "${FROM_FILE}" | copy_with_backend "${backend}"
+  fi
+elif [[ ${#INLINE_TEXT[@]} -gt 0 ]]; then
+  printf '%s' "$(printf '%s ' "${INLINE_TEXT[@]}" | sed 's/ $//')" |
+    copy_with_backend "${backend}"
+else
+  copy_with_backend "${backend}"
+fi
+
+log::success "Copied to clipboard."
