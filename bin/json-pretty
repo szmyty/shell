@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -Eeuo pipefail
+
+# ------------------------------------------------------------------------------
+# json-pretty — safe JSON pretty printer using jq
+# ------------------------------------------------------------------------------
+
+VERSION="1.1.0"
+
+# ------------------------------------------------------------------------------
+# Bootstrap shell library
+# ------------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../shell.sh"
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+die() {
+  local code="$1"; shift || true
+  log::error "$*"
+  exit "${code}"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  json-pretty [FILE.json]...
+  json-pretty --help | --version
+
+Pretty-prints JSON from one or more files, or from stdin if no file is given.
+
+Options:
+  -h, --help      Show this help message
+  -v, --version   Show version and exit
+EOF
+}
+
+require_deps() {
+  guard::has_command jq || die 127 "jq is required but not installed."
+}
+
+pretty_print_file() {
+  local file="$1"
+  guard::file_exists "${file}" || die 1 "File not found: ${file}"
+
+  jq --sort-keys '.' "${file}" ||
+    die 1 "Invalid JSON in file: ${file}"
+}
+
+pretty_print_stdin() {
+  jq --sort-keys '.' ||
+    die 1 "Invalid JSON from stdin"
+}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+main() {
+  require_deps
+
+  if [[ $# -eq 0 ]]; then
+    pretty_print_stdin
+    return 0
+  fi
+
+  for arg in "$@"; do
+    case "${arg}" in
+      -h|--help)
+        usage
+        return 0
+        ;;
+      -v|--version)
+        printf 'json-pretty v%s\n' "${VERSION}"
+        return 0
+        ;;
+      -*)
+        die 1 "Unknown option: ${arg}"
+        ;;
+      *)
+        pretty_print_file "${arg}"
+        ;;
+    esac
+  done
+}
+
+main "$@"

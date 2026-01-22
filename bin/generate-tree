@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -Eeuo pipefail
+
+# ------------------------------------------------------------------------------
+# generate-tree — generate a Markdown file of the git-tracked directory structure
+# ------------------------------------------------------------------------------
+
+VERSION="1.2.0"
+DEFAULT_OUTPUT="docs/PROJECT_STRUCTURE.md"
+
+# ------------------------------------------------------------------------------
+# Bootstrap shell library
+# ------------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../shell.sh"
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+die() {
+  local code="$1"; shift || true
+  log::error "$*"
+  exit "${code}"
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  generate-tree [output-path]
+
+Generates a Markdown file containing the git-tracked directory structure.
+
+Arguments:
+  output-path    Optional path to write the tree
+                 (default: ${DEFAULT_OUTPUT})
+
+Options:
+  -h, --help     Show this help message
+  -v, --version  Show version and exit
+EOF
+}
+
+require_deps() {
+  guard::has_command tree || die 127 "'tree' command not found."
+}
+
+# ------------------------------------------------------------------------------
+# Core logic
+# ------------------------------------------------------------------------------
+
+detect_root() {
+  git rev-parse --show-toplevel 2>/dev/null || printf "."
+}
+
+generate_tree() {
+  local output_path="$1"
+  local root
+
+  mkdir -p "$(dirname "${output_path}")"
+
+  root="$(detect_root)"
+
+  log::info "Generating project structure → ${output_path}"
+
+  {
+    echo '# Project Structure'
+    echo
+    echo '```text'
+
+    if [[ "${root}" != "." ]]; then
+      git -C "${root}" ls-tree -r --name-only HEAD |
+        grep -vE '^reports/' |
+        tree --fromfile ||
+        log::warn "tree --fromfile failed; falling back to plain tree."
+    else
+      tree -I "reports"
+    fi
+
+    echo '```'
+  } >"${output_path}"
+
+  if git rev-parse --is-inside-work-tree &>/dev/null; then
+    git add "${output_path}"
+  fi
+
+  log::success "Tree written to: ${output_path}"
+}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+main() {
+  case "${1:-}" in
+    -h|--help)
+      usage; exit 0
+      ;;
+    -v|--version)
+      printf 'generate-tree v%s\n' "${VERSION}"
+      exit 0
+      ;;
+  esac
+
+  require_deps
+
+  generate_tree "${1:-${DEFAULT_OUTPUT}}"
+
+  log::info "Preview (first 10 lines):"
+  head -n 10 "${1:-${DEFAULT_OUTPUT}}"
+}
+
+main "$@"

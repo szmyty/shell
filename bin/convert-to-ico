@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -Eeuo pipefail
+
+# ------------------------------------------------------------------------------
+# convert-to-ico — convert an image to .ico using ImageMagick
+# ------------------------------------------------------------------------------
+
+VERSION="1.1.0"
+
+# ------------------------------------------------------------------------------
+# Bootstrap shell library
+# ------------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../shell.sh"
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+die() {
+  local code="$1"; shift || true
+  log::error "$*"
+  exit "${code}"
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  convert-to-ico <image_file>
+
+Converts an image file to .ico format using ImageMagick.
+
+Options:
+  -h, --help      Show this help message
+  -v, --version   Show version and exit
+EOF
+}
+
+detect_imagemagick() {
+  if guard::has_command magick; then
+    printf "magick"
+    return 0
+  fi
+
+  if guard::has_command convert; then
+    printf "convert"
+    return 0
+  fi
+
+  return 1
+}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+main() {
+  case "${1:-}" in
+    -h|--help)
+      usage; exit 0
+      ;;
+    -v|--version)
+      printf 'convert-to-ico v%s\n' "${VERSION}"
+      exit 0
+      ;;
+  esac
+
+  [[ $# -eq 1 ]] || die 1 "Expected exactly one argument: <image_file>"
+
+  local input_image="$1"
+  guard::file_exists "${input_image}" ||
+    die 2 "File not found: ${input_image}"
+
+  local im_cmd
+  im_cmd="$(detect_imagemagick)" ||
+    die 127 "ImageMagick not found (requires 'magick' or 'convert')."
+
+  local output_image="${input_image%.*}.ico"
+
+  log::info "Using ImageMagick command: ${im_cmd}"
+  log::info "Converting '${input_image}' → '${output_image}'"
+
+  if [[ "${im_cmd}" == "magick" ]]; then
+    magick "${input_image}" -resize 256x256 "${output_image}"
+  else
+    convert "${input_image}" -resize 256x256 "${output_image}"
+  fi
+
+  log::success "Successfully created: ${output_image}"
+}
+
+main "$@"

@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -Eeuo pipefail
+
+# ------------------------------------------------------------------------------
+# github-latest-release
+#
+# Fetch metadata and SHA256 checksum for the latest GitHub release tarball.
+# ------------------------------------------------------------------------------
+
+VERSION="1.2.0"
+TMP_TARBALL="$(mktemp)"
+
+# ------------------------------------------------------------------------------
+# Bootstrap shell library
+# ------------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../shell.sh"
+
+# ------------------------------------------------------------------------------
+# Helpers (policy)
+# ------------------------------------------------------------------------------
+
+die() {
+  local code="$1"; shift || true
+  log::error "$*"
+  exit "${code}"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  github-latest-release <owner>/<repo>
+  github-latest-release --help | --version
+
+Description:
+  Fetches metadata for the latest GitHub release and computes a SHA256
+  checksum of the release tarball.
+
+Outputs:
+  - tag
+  - commit SHA
+  - tarball URL
+  - tarball SHA256
+EOF
+}
+
+require_deps() {
+  for cmd in curl jq git sha256sum; do
+    guard::has_command "${cmd}" ||
+      die 127 "Missing dependency: ${cmd}"
+  done
+}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+main() {
+  case "${1:-}" in
+    -h|--help)
+      usage; exit 0
+      ;;
+    -v|--version)
+      printf 'github-latest-release v%s\n' "${VERSION}"
+      exit 0
+      ;;
+  esac
+
+  [[ $# -eq 1 ]] || usage
+
+  local repo="$1"
+
+  require_deps
+
+  log::info "Fetching latest release metadata for ${repo}"
+
+  local json tag url published commit sha256
+
+  json="$(github::latest_release_json "${repo}")"
+
+  tag="$(printf '%s' "${json}" | github::latest_tag)"
+  url="$(printf '%s' "${json}" | github::tarball_url)"
+  published="$(printf '%s' "${json}" | github::published_at)"
+
+  [[ -n "${tag}" && "${tag}" != "null" ]] ||
+    die 1 "No releases found for ${repo}"
+
+  commit="$(github::commit_sha_for_tag "${repo}" "${tag}")"
+
+  log::info "Downloading tarball to compute checksum…"
+  curl --silent --location --output "${TMP_TARBALL}" "${url}"
+
+  sha256="$(sha256sum "${TMP_TARBALL}" | awk '{print $1}')"
+
+  log::success "Release metadata:"
+  printf "Tag:            %s\n" "${tag}"
+  printf "Published At:   %s\n" "${published}"
+  printf "Commit SHA:     %s\n" "${commit}"
+  printf "Tarball URL:   %s\n" "${url}"
+  printf "SHA256:        %s\n" "${sha256}"
+
+  echo
+  log::info "Reproducible build exports:"
+  printf 'export GITHUB_REPO="%s"\n' "${repo}"
+  printf 'export GITHUB_TAG="%s"\n' "${tag}"
+  printf 'export GITHUB_COMMIT="%s"\n' "${commit}"
+  printf 'export GITHUB_TARBALL_URL="%s"\n' "${url}"
+  printf 'export GITHUB_TARBALL_SHA256="%s"\n' "${sha256}"
+}
+
+trap 'rm -f "${TMP_TARBALL}"' EXIT
+main "$@"
