@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -Eeuo pipefail
+
+# ------------------------------------------------------------------------------
+# list-fonts — list installed fonts cross-platform
+# ------------------------------------------------------------------------------
+
+VERSION="1.3.0"
+
+FILTER=""
+OUTPUT_FILE=""
+OUTPUT_JSON=false
+
+# ------------------------------------------------------------------------------
+# Bootstrap shell library
+# ------------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../shell.sh"
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+die() {
+  local code="$1"; shift || true
+  log::error "$*"
+  exit "${code}"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  list-fonts [options]
+
+Lists installed fonts (best-effort, cross-platform).
+
+Options:
+  --grep <pattern>      Filter font list
+  --out <file>          Write output to file
+  --json                Output as JSON
+  -h, --help            Show help
+  -v, --version         Show version
+EOF
+}
+
+require_deps() {
+  if ! fonts::list_raw >/dev/null 2>&1; then
+    die 127 "No supported font backend found for this platform."
+  fi
+
+  if [[ "${OUTPUT_JSON}" == true ]]; then
+    guard::has_command jq ||
+      die 127 "jq is required for --json output."
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# CLI parsing
+# ------------------------------------------------------------------------------
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --grep)
+      FILTER="$2"; shift
+      ;;
+    --out)
+      OUTPUT_FILE="$2"; shift
+      ;;
+    --json)
+      OUTPUT_JSON=true
+      ;;
+    -h|--help)
+      usage; exit 0
+      ;;
+    -v|--version)
+      printf 'list-fonts v%s\n' "${VERSION}"
+      exit 0
+      ;;
+    -*)
+      die 1 "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+main() {
+  require_deps
+
+  log::info "Listing fonts (platform: $(os::name))"
+
+  local output
+  output="$(fonts::list_raw | sort)"
+
+  if [[ -n "${FILTER}" ]]; then
+    output="$(printf '%s\n' "${output}" | grep -i "${FILTER}" || true)"
+  fi
+
+  if [[ "${OUTPUT_JSON}" == true ]]; then
+    printf '%s\n' "${output}" |
+      awk -F ': ' '
+        {
+          name=$1; file=$2;
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", file);
+          printf("{\"name\":\"%s\",\"file\":\"%s\"}\n", name, file);
+        }' |
+      jq -s '.'
+    return
+  fi
+
+  if [[ -n "${OUTPUT_FILE}" ]]; then
+    printf '%s\n' "${output}" >"${OUTPUT_FILE}"
+    log::success "Font list written to ${OUTPUT_FILE}"
+  else
+    printf '%s\n' "${output}"
+  fi
+}
+
+main "$@"
